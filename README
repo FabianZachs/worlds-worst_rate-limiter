@@ -1,0 +1,47 @@
+Middleware rate limiter
+Rate limiter works based on user account (or IP?)
+We inform users of being throttled  (HTTP response code 429 (too many requests))
+The rate limiter is distributed
+rate limiter is middleware: client --- rate_limiter --> server
+Rate limiter is in the API gateway
+  API gateway is a fully managed service that supports rate limiting, SSL termination, authentication, IP whitelisting, servicing static content
+
+
+Chosen Rate limiting algorithm: 
+  - Token bucket. Request consumes a token, tokens are added at a constant rate (ex, 4 tokens every minute)
+      - token can overflow bucket, need to decide bucket size, refill rate, different buckets for various requests (GET, POST, etc)
+
+  - Leaking bucket: requests added to queue (if queue not full; dropped if it is)
+    - requests pulled from queue and processed at regular intervals
+    - Tune bucket size and request outflow rate
+    - Good when we need steady outflow rate
+
+  - Fixed window: timeline split into fixed time windows. Counter for each window, w/ requests inc counter
+    - If request limit hit for counter window, drop additional requests
+    - Issue is we can have burst of requests between 2 counter windows. Ex 5 req per min window. But could have 5 in last 30 sec of previous window and 5 in first 30 sec of next window. 10 req in 1 min, apposed to 5.
+
+  - Sliding window: track request timestamps
+    - We reject requests when we have exceeded past the count for the window. Then when the next request comes in the new window, this marks time , we remove the logs of 
+  - Sliding window counter:
+    - Suppose we allow 7 requests per min, 5 req in previous min and 3 in current minute. If a new request comes in at 30% into current minute, then:
+      - rolling requests = requests in current window + requests in previous window * (1 - percent in current window)
+        =  3 + 5 * 0.7 =6.5 < 7 => allow request
+
+
+
+Storage of counters:
+  - DB - bad, dont want disk accesses
+  - redis - good, in-memory, provides INCR, EXPIRE commands
+    - client sends req, fetch counter for corresponding bucket from redis, checks if rate limit hit. Request sent to API servers if not (sends err if it did), incr counter and save back to redit
+
+When too many Requests; they can be dropper or forwarded to a queue
+
+Distributed environment:
+  - Since we read counter from redis, incr, and write back, we have possible race condition between multiple threads. Lock overhead is too high
+    - MORE
+  We use centralised redis so that with multiple rate limiters, a client can send request to either and be synchronised (we dont have issue where 1 rate limiter knows nothing about previous client requests because they previous communicated with the other rate limiter)
+
+
+Monitoring:
+  - to ensure rate limiter is effective
+  - to ensure rate limiting rules are effective (too many dropped requests, lighten rules. Too much of a spike, swap algorithms)
