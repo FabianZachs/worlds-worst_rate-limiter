@@ -45,3 +45,38 @@ Distributed environment:
 Monitoring:
   - to ensure rate limiter is effective
   - to ensure rate limiting rules are effective (too many dropped requests, lighten rules. Too much of a spike, swap algorithms)
+
+
+
+
+### Redis
+$ redis-server # starts redis server
+$ redis-cli
+>  SET <KEY> <VALUE>
+> GET <KEY>
+> EXISTS <KEY>
+> KEYS *
+> flushall
+> clear
+> expire <KEY> <#seconds>
+> ttl <KEY> # time to live
+> setex <KEY> <TTL> <VALUE>
+
+#### Lists
+> lpush <KEY> <VALUE>
+> rpush <KEY> <VALUE>
+> lpop <KEY> 
+> rpop <KEY> 
+> lrange <KEY> <START_INDEX> <END_INDEX>
+
+#### Sets
+> SADD <KEY> <VALUE>
+> SMEMBERS <KEY>
+> SREM <KEY> <VALUE>
+
+#### Hashes (a key value pair inside redis's key pair)
+> HSET <KEY> <FIELD> <VALUE>
+> HGET <KEY> <FIELD>
+> HGETALL <KEY>
+> HDEL <KEY> <FIELD>
+> HEXISTS <KEY> <FIELD>

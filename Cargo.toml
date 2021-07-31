@@ -4,5 +4,15 @@ version = "0.1.0"
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "rate_limiter"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bin"
+path = "src/bin.rs"
 
 [dependencies]
+yaml-rust = "0.4"
+dotenv = "0.15.0"
+redis = "0.21.0"

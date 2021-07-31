@@ -1,0 +1,6 @@
+domain: messaging
+descriptors:
+  - key: client_id
+    rate_limit:
+      unit: minute
+      requests_per_unit: 5
