@@ -8,11 +8,8 @@ edition = "2018"
 name = "rate_limiter"
 path = "src/lib.rs"
 
-[[bin]]
-name = "bin"
-path = "src/bin.rs"
-
 [dependencies]
-yaml-rust = "0.4"
+yaml-rust = "0.4.5"
 dotenv = "0.15.0"
 redis = "0.21.0"
+chrono = "0.4"
