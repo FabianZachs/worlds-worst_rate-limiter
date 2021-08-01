@@ -34,6 +34,16 @@ pub enum RateLimiterResponse {
     Success,
 }
 
+impl RequestType {
+    /// For bringup
+    fn toString(req: &RequestType) -> String {
+        match req {
+            RequestType::Login => String::from("Login"),
+            RequestType::Message => String::from("Message"),
+        }
+    }
+}
+
 impl RateLimiter {
     pub fn new() -> RateLimiter {
         dotenv().ok(); // load .env variables to environment
@@ -80,13 +90,19 @@ impl RateLimiter {
         *self.conf.get(&req_type).unwrap()
     }
 
-    pub fn recv_request(&self, req: RequestType) -> RateLimiterResponse {
-        let key = stringify!(req); // temp. instead use <request_type>:<user_id>
+    /// This returns the key into the DB for a RequestType,user_id tuple
+    fn get_request_key(req: &RequestType, user_id: u32) -> String {
+        String::from(format!("{}:{}", RequestType::toString(req), user_id))
+    }
+
+    pub fn recv_request(&mut self, req: RequestType, user_id: u32) -> RateLimiterResponse {
+        let key = RateLimiter::get_request_key(&req, user_id);
         let bucket_size = self.conf.get(&req).expect("Unknown request type in conf");
-        let past_user_req = self.storage_handler.get(key);
+        let past_user_req = self.storage_handler.get(&key);
 
         if past_user_req.len() < (*bucket_size as usize) {
             // we promote bucket_size since num bits for usize >= i32 (>= since it depends on machine)
+            self.storage_handler.append(&key, "DATE1");
             RateLimiterResponse::Success
         } else {
             RateLimiterResponse::Drop
@@ -96,44 +112,68 @@ impl RateLimiter {
 
 #[cfg(test)]
 mod tests {
+    use std::thread::sleep;
+
     use crate::rl::rate_limiter::*;
 
     #[test]
     fn one_req() {
-        let rl = RateLimiter::new();
-        let resp = rl.recv_request(RequestType::Message);
+        let user_id = 1;
+        let request_key = RateLimiter::get_request_key(&RequestType::Message, user_id); // to remove what we've added
+        let mut rl = RateLimiter::new();
+        rl.storage_handler.remove_users_past_requests(&request_key); // to ensure past test runs don't mess up
+        let resp = rl.recv_request(RequestType::Message, user_id);
         assert_eq!(resp, RateLimiterResponse::Success);
     }
 
     #[test]
     fn multiple_requests_ok_immediate() {
-        let rl = RateLimiter::new();
+        let user_id = 2;
+        let request_key = RateLimiter::get_request_key(&RequestType::Message, user_id); // to remove what we've added
+        let mut rl = RateLimiter::new();
+        rl.storage_handler.remove_users_past_requests(&request_key); // to ensure past test runs don't mess up
         let max_num_requests_in_window = rl.get_bucket_size_for_request_type(RequestType::Message);
         for i in 0..max_num_requests_in_window {
-            let resp = rl.recv_request(RequestType::Message);
+            let resp = rl.recv_request(RequestType::Message, user_id);
             assert_eq!(resp, RateLimiterResponse::Success);
         }
     }
 
     #[test]
     fn multiple_requests_not_ok_immediate() {
-        let rl = RateLimiter::new();
+        let user_id = 3;
+        let mut rl = RateLimiter::new();
+        let request_key = RateLimiter::get_request_key(&RequestType::Message, user_id); // to remove what we've added
+        rl.storage_handler.remove_users_past_requests(&request_key); // to ensure past test runs don't mess up
         let max_num_requests_in_window = rl.get_bucket_size_for_request_type(RequestType::Message);
         for i in 0..max_num_requests_in_window {
-            let resp = rl.recv_request(RequestType::Message);
+            let resp = rl.recv_request(RequestType::Message, user_id);
             assert_eq!(resp, RateLimiterResponse::Success);
         }
-        let resp = rl.recv_request(RequestType::Message);
+        let resp = rl.recv_request(RequestType::Message, user_id);
         assert_eq!(resp, RateLimiterResponse::Drop);
     }
 
     #[test]
     fn multiple_requests_ok_timed() {
-        unimplemented!()
-    }
+        let user_id = 4;
+        let mut rl = RateLimiter::new();
+        let request_key = RateLimiter::get_request_key(&RequestType::Message, user_id); // to remove what we've added
+        rl.storage_handler.remove_users_past_requests(&request_key); // to ensure past test runs don't mess up
 
-    #[test]
-    fn multiple_requests_not_ok_timed() {
-        unimplemented!()
+        let max_num_requests_in_window = rl.get_bucket_size_for_request_type(RequestType::Message);
+        for i in 0..max_num_requests_in_window {
+            let resp = rl.recv_request(RequestType::Message, user_id);
+            assert_eq!(resp, RateLimiterResponse::Success);
+            sleep(std::time::Duration::new(5, 0));
+        }
+        let resp = rl.recv_request(RequestType::Message, user_id);
+        assert_eq!(resp, RateLimiterResponse::Drop);
+        sleep(std::time::Duration::new(50, 0)); // window size is 60 seconds, so by now should be able to request more
+        assert_eq!(resp, RateLimiterResponse::Success);
+        sleep(std::time::Duration::new(5, 0));
+        assert_eq!(resp, RateLimiterResponse::Success);
+        sleep(std::time::Duration::new(5, 0));
+        assert_eq!(resp, RateLimiterResponse::Success);
     }
 }

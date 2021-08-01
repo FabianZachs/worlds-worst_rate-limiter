@@ -25,13 +25,29 @@ impl StorageHandler {
         StorageHandler { con }
     }
 
-    pub fn get(&self, key: &str) -> Vec<String> {
-        let x = vec![String::from("1"), String::from("2")];
+    pub fn get(&mut self, key: &str) -> Vec<String> {
+        let vals: Vec<String> = redis::cmd("lrange")
+            .arg(key)
+            .arg("0")
+            .arg("-1")
+            .query(&mut self.con)
+            .expect("lrange failed");
 
-        x
+        vals
     }
 
-    pub fn add(&self, key: &str, val: &str) {
-        self.con.set(key, val)
+    pub fn append(&mut self, key: &str, val: &str) {
+        let _: () = redis::cmd("rpush")
+            .arg(key)
+            .arg(val)
+            .query(&mut self.con)
+            .expect("rpush command failed");
+    }
+
+    pub fn remove_users_past_requests(&mut self, key: &str) {
+        let _: () = redis::cmd("del")
+            .arg(key)
+            .query(&mut self.con)
+            .expect("DEL failed");
     }
 }

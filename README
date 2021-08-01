@@ -68,6 +68,7 @@ $ redis-cli
 > lpop <KEY> 
 > rpop <KEY> 
 > lrange <KEY> <START_INDEX> <END_INDEX>
+               0             -1
 
 #### Sets
 > SADD <KEY> <VALUE>
