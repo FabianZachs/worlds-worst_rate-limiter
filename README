@@ -80,3 +80,42 @@ $ redis-cli
 > HGETALL <KEY>
 > HDEL <KEY> <FIELD>
 > HEXISTS <KEY> <FIELD>
+
+
+
+
+Though redis has TTL, it doesnt support this for elements of a list. So the application must handle this.
+
+                   |
+                   |
+                   |
+               X   |
+    X       X  X   |    x
++-----+------------+------+----
+0    0.3           1     1.3
+Algorithm:
+1)  get list of query timestamps from redis:
+  ex: 0.2, 0.6, 0.6, 1.2
+2) remove queries before the query window (time() - 60s)
+                   |
+                   |
+                   |
+               X   |
+            X  X   |    x
++-----+------------+------+----
+0    0.3           1     1.3
+
+3) Find the % into the current window: time_in_current+window = time() - second_round_down(time())    
+  ex: time_in_current_window = 1.3 - 1.0 = 0.3s 
+  this is also percent_in_current_window
+4) Find num requests in current window by starting from latest request and counting back
+                <---
+  ex: 0.6, 0.6, 1.2 
+5) Find num requests in previous window
+  ex: num_req_in_prev_window = total - num_req_in_current_window
+
+5) Compute:
+  rolling_requests = num_req_in_current_window + num_req_in_prev_window * (1 - percent_in_current_window)
+
+6) If rolling_requests < req_limit: return success and add the request to redis
+  

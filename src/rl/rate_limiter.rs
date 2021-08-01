@@ -30,7 +30,7 @@ pub enum RequestType {
 /// message for the client
 #[derive(Debug, PartialEq, Eq)]
 pub enum RateLimiterResponse {
-    Drop(String),
+    Drop,
     Success,
 }
 
@@ -75,6 +75,11 @@ impl RateLimiter {
         }
     }
 
+    /// Retreives the number of requests in the one minute window for a specific request type
+    pub fn get_bucket_size_for_request_type(&self, req_type: RequestType) -> u32 {
+        *self.conf.get(&req_type).unwrap()
+    }
+
     pub fn recv_request(&self, req: RequestType) -> RateLimiterResponse {
         let key = stringify!(req); // temp. instead use <request_type>:<user_id>
         let bucket_size = self.conf.get(&req).expect("Unknown request type in conf");
@@ -84,9 +89,7 @@ impl RateLimiter {
             // we promote bucket_size since num bits for usize >= i32 (>= since it depends on machine)
             RateLimiterResponse::Success
         } else {
-            RateLimiterResponse::Drop(String::from(
-                "You have no request tokens left... Take a coffee break",
-            ))
+            RateLimiterResponse::Drop
         }
     }
 }
@@ -100,5 +103,37 @@ mod tests {
         let rl = RateLimiter::new();
         let resp = rl.recv_request(RequestType::Message);
         assert_eq!(resp, RateLimiterResponse::Success);
+    }
+
+    #[test]
+    fn multiple_requests_ok_immediate() {
+        let rl = RateLimiter::new();
+        let max_num_requests_in_window = rl.get_bucket_size_for_request_type(RequestType::Message);
+        for i in 0..max_num_requests_in_window {
+            let resp = rl.recv_request(RequestType::Message);
+            assert_eq!(resp, RateLimiterResponse::Success);
+        }
+    }
+
+    #[test]
+    fn multiple_requests_not_ok_immediate() {
+        let rl = RateLimiter::new();
+        let max_num_requests_in_window = rl.get_bucket_size_for_request_type(RequestType::Message);
+        for i in 0..max_num_requests_in_window {
+            let resp = rl.recv_request(RequestType::Message);
+            assert_eq!(resp, RateLimiterResponse::Success);
+        }
+        let resp = rl.recv_request(RequestType::Message);
+        assert_eq!(resp, RateLimiterResponse::Drop);
+    }
+
+    #[test]
+    fn multiple_requests_ok_timed() {
+        unimplemented!()
+    }
+
+    #[test]
+    fn multiple_requests_not_ok_timed() {
+        unimplemented!()
     }
 }

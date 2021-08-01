@@ -9,8 +9,7 @@ use std::collections::HashMap;
 use std::env;
 
 pub struct StorageHandler {
-    hm: HashMap<String, Vec<String>>,
-    // redis_con: redis::Connection,
+    con: redis::Connection,
 }
 
 impl StorageHandler {
@@ -23,12 +22,16 @@ impl StorageHandler {
         println!("redis url: {}", redis_url);
         let client = redis::Client::open(redis_url).expect("Redis open command failed");
         let con = client.get_connection().expect("Redis connection failed");
-        StorageHandler { hm: HashMap::new() }
+        StorageHandler { con }
     }
 
     pub fn get(&self, key: &str) -> Vec<String> {
         let x = vec![String::from("1"), String::from("2")];
 
         x
+    }
+
+    pub fn add(&self, key: &str, val: &str) {
+        self.con.set(key, val)
     }
 }
