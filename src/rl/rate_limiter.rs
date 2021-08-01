@@ -1,25 +1,31 @@
 use crate::rl::storage_handler::StorageHandler;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 
-use chrono::{Duration, Timelike};
+use chrono::Timelike;
 use dotenv::dotenv;
 use std::collections::HashMap;
 use std::{env, io::Read};
 use yaml_rust::YamlLoader;
 
-/// Used as value in Redis for a past request
-struct RequestLog {}
-
 /// conf maps the domain to the max number of requests per set duration unit
+/// New user requests are first passed to the RateLimiter.
+/// If ```recv_request``` retuns ```RateLimiterResponse::Success``` the request can be forwarded to
+/// the actual servers. if ```RateLimiterResponse::Drop``` is returned, the client has exceeded
+/// their allowed request per unit time, and the request should be dropped.
 pub struct RateLimiter {
+    /// Stores past user requests
     storage_handler: StorageHandler,
-    conf: HashMap<RequestType, u32>, // needs redis connection (u32 is req per min)
+    /// Maps ```RequestType``` to the limit per unit time (minute)
+    conf: HashMap<RequestType, u32>,
 }
 
-/// The RateLimiter will receive a Request, query redis to retreiv
+/// The RateLimiter will receive a request, query redis to retreiv
 /// We map a request to a RequestType so our RateLimiter knows what the config is for that request
 /// Example: We may only allow 5 login events per hour, vs 10 message requests every minute
+/// A client's request must be mapped to one of these for the RateLimiter to know the allowed rate
+/// for the type of request. Example, ```RequestType::Login``` may only allow 2 requests per minute
+/// while ```RequestType::Message``` may allow 5.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum RequestType {
     Login,
@@ -36,7 +42,7 @@ pub enum RateLimiterResponse {
 }
 
 impl RequestType {
-    /// For bringup
+    /// We use this to create keys
     fn toString(req: &RequestType) -> String {
         match req {
             RequestType::Login => String::from("Login"),
@@ -46,6 +52,7 @@ impl RequestType {
 }
 
 impl RateLimiter {
+    /// Create a new RateLimiter. Reads .env file for yaml config,
     pub fn new() -> RateLimiter {
         dotenv().ok(); // load .env variables to environment
 
@@ -63,7 +70,6 @@ impl RateLimiter {
             .expect("Unable to read yaml file into string");
         let docs = YamlLoader::load_from_str(&yaml_str).expect("Unable parse YAML string");
 
-        // TEMP
         let mut conf: HashMap<RequestType, u32> = HashMap::new();
         conf.insert(RequestType::Message, 5);
 
@@ -86,7 +92,7 @@ impl RateLimiter {
         }
     }
 
-    /// Retreives the number of requests in the one minute window for a specific request type
+    /// Retreives the configured max number of requests in the one minute window for a specific request type
     fn get_bucket_size_for_request_type(&self, req_type: RequestType) -> u32 {
         *self
             .conf
@@ -94,11 +100,14 @@ impl RateLimiter {
             .expect("Unknown request type in conf")
     }
 
-    /// This returns the key into the DB for a RequestType,user_id tuple
+    /// Returns the key into the DB for a RequestType,user_id tuple
     fn get_request_key(req: &RequestType, user_id: u32) -> String {
         String::from(format!("{}:{}", RequestType::toString(req), user_id))
     }
 
+    /// User requests should be passed into ```recv_request```.
+    /// This implements our rate limiter algorithm (see README) and retuns whether the request
+    /// should be dropped (limit already hit), or if the request should be forwarded to the server.
     pub fn recv_request(&mut self, req: RequestType, user_id: u32) -> RateLimiterResponse {
         let key = RateLimiter::get_request_key(&req, user_id);
         let bucket_size = self.get_bucket_size_for_request_type(req);
@@ -110,14 +119,8 @@ impl RateLimiter {
         for req in &past_user_reqs {
             let req_time: chrono::DateTime<chrono::Utc> =
                 chrono::DateTime::from_str(req).expect("Redis key was not a parsable date");
-            println!(
-                "REQ: {}, now - min: {}",
-                req_time,
-                now - chrono::Duration::minutes(1)
-            );
             if req_time < (now - chrono::Duration::minutes(1)) {
                 self.storage_handler.pop_oldest_request(&key);
-                println!("REMOVEED: {}", req);
                 continue;
             }
             break;
@@ -126,7 +129,6 @@ impl RateLimiter {
 
         // find percentage into current window
         let percent_into_current_window = now.second() as f32 / 60.0;
-        println!("percnet: {}", percent_into_current_window);
         let mut num_requests_in_current_window = 0;
         for req in past_user_reqs.iter().rev() {
             let req_time: chrono::DateTime<chrono::Utc> =
