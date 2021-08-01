@@ -43,8 +43,8 @@ pub enum RateLimiterResponse {
 
 impl RequestType {
     /// We use this to create keys
-    fn toString(req: &RequestType) -> String {
-        match req {
+    fn to_string(&self) -> String {
+        match self {
             RequestType::Login => String::from("Login"),
             RequestType::Message => String::from("Message"),
         }
@@ -71,21 +71,19 @@ impl RateLimiter {
         let docs = YamlLoader::load_from_str(&yaml_str).expect("Unable parse YAML string");
 
         let mut conf: HashMap<RequestType, u32> = HashMap::new();
-        conf.insert(RequestType::Message, 5);
 
-        //println!("{:?} ", docs[0]["domains"][0]["messaging"]);
-        ///println!("{:?} ", docs[0]["domains"][1][0]);
-        //println!("{:?} ", docs[0]["domains"][0]["messaging"]);
+        let bucket = &docs[0]["domains"][0][&RequestType::Message.to_string()[..]]
+            .as_i64()
+            .unwrap();
+        println!("message_bucket:{:?} ", bucket);
+        conf.insert(RequestType::Message, *bucket as u32);
 
-        //println!("{:?} ", docs[0]["A"][0][0].as_str());
-        //let domain = docs[0]["domains"][0].as_str().unwrap();
-        //let requests_per_minute = docs[0]["domains"][0]["requests_per_unit"].as_i64().unwrap();
-        //println!("{} {}", domain, requests_per_minute);
+        let bucket = &docs[0]["domains"][1][&RequestType::Login.to_string()[..]]
+            .as_i64()
+            .unwrap();
+        println!("message_bucket:{:?} ", bucket);
+        conf.insert(RequestType::Login, *bucket as u32);
 
-        //let x = docs[0].as_str().unwrap();
-
-        //println!("YMAL: {}", x);
-        // TODO we need rate limiter yaml config
         RateLimiter {
             storage_handler,
             conf,
@@ -102,13 +100,15 @@ impl RateLimiter {
 
     /// Returns the key into the DB for a RequestType,user_id tuple
     fn get_request_key(req: &RequestType, user_id: u32) -> String {
-        String::from(format!("{}:{}", RequestType::toString(req), user_id))
+        String::from(format!("{}:{}", req.to_string(), user_id))
     }
 
     /// User requests should be passed into ```recv_request```.
     /// This implements our rate limiter algorithm (see README) and retuns whether the request
     /// should be dropped (limit already hit), or if the request should be forwarded to the server.
     pub fn recv_request(&mut self, req: RequestType, user_id: u32) -> RateLimiterResponse {
+        //println!("++++++++++++++++++");
+        //println!("CALL");
         let key = RateLimiter::get_request_key(&req, user_id);
         let bucket_size = self.get_bucket_size_for_request_type(req);
         let past_user_reqs: Vec<String> = self.storage_handler.get(&key);
@@ -116,24 +116,32 @@ impl RateLimiter {
         let now = chrono::Utc::now();
 
         // remove old queures (lpop redis)
+        //println!("CHECK OLD REQ:");
+        //println!("LOWER bound: {}", now - chrono::Duration::minutes(1));
         for req in &past_user_reqs {
             let req_time: chrono::DateTime<chrono::Utc> =
                 chrono::DateTime::from_str(req).expect("Redis key was not a parsable date");
+
+            //println!("old req: {}", req_time);
             if req_time < (now - chrono::Duration::minutes(1)) {
+                //println!("REMOVED");
                 self.storage_handler.pop_oldest_request(&key);
                 continue;
             }
-            break;
+            break; // we can break since they are in order
         }
         let past_user_reqs: Vec<String> = self.storage_handler.get(&key); // get updated list from redis
 
-        // find percentage into current window
         let percent_into_current_window = now.second() as f32 / 60.0;
+
+        // find number of requests in current minute window
         let mut num_requests_in_current_window = 0;
         for req in past_user_reqs.iter().rev() {
             let req_time: chrono::DateTime<chrono::Utc> =
                 chrono::DateTime::from_str(req).expect("Redis key was not a parsable date");
             if req_time > now.with_second(0).unwrap() {
+                //println!("IN cu window: {}", req_time);
+                // NOTE suspected this
                 num_requests_in_current_window += 1
             } else {
                 break;
@@ -144,6 +152,9 @@ impl RateLimiter {
         let rolling_requests = num_requests_in_current_window as f32
             + num_requests_in_prev_window as f32 * (1.0 - percent_into_current_window);
 
+        //println!("cur: {}\n\n", num_requests_in_current_window);
+        //println!("prev: {}\n\n", num_requests_in_prev_window);
+        //println!("rolling: {}\n\n", rolling_requests);
         if rolling_requests < (bucket_size as f32) {
             self.storage_handler.append(&key, &now.to_rfc3339());
             RateLimiterResponse::Success
@@ -208,8 +219,9 @@ mod tests {
         for _ in 0..max_num_requests_in_window {
             let resp = rl.recv_request(RequestType::Message, user_id);
             assert_eq!(resp, RateLimiterResponse::Success);
-            sleep(std::time::Duration::new(5, 0));
+            sleep(std::time::Duration::new(2, 0));
         }
+        let _ = rl.recv_request(RequestType::Message, user_id); // this can go either way given where the minute boundary is (we use waited rolling_requests)
         let resp = rl.recv_request(RequestType::Message, user_id);
         assert_eq!(resp, RateLimiterResponse::Drop);
         sleep(std::time::Duration::new(55, 0)); // window size is 60 seconds, so by now should be able to request more
@@ -223,8 +235,8 @@ mod tests {
         assert_eq!(resp, RateLimiterResponse::Success);
     }
 
-    #[test]
-    fn multiple_users() {
-        unimplemented!()
-    }
+    //    #[test]
+    //    fn multiple_types() {
+    //        unimplemented!()
+    //    }
 }
