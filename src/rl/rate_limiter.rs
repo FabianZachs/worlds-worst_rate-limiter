@@ -1,7 +1,8 @@
 use crate::rl::storage_handler::StorageHandler;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
-use chrono::Duration;
+use chrono::{Duration, Timelike};
 use dotenv::dotenv;
 use std::collections::HashMap;
 use std::{env, io::Read};
@@ -86,8 +87,11 @@ impl RateLimiter {
     }
 
     /// Retreives the number of requests in the one minute window for a specific request type
-    pub fn get_bucket_size_for_request_type(&self, req_type: RequestType) -> u32 {
-        *self.conf.get(&req_type).unwrap()
+    fn get_bucket_size_for_request_type(&self, req_type: RequestType) -> u32 {
+        *self
+            .conf
+            .get(&req_type)
+            .expect("Unknown request type in conf")
     }
 
     /// This returns the key into the DB for a RequestType,user_id tuple
@@ -97,12 +101,49 @@ impl RateLimiter {
 
     pub fn recv_request(&mut self, req: RequestType, user_id: u32) -> RateLimiterResponse {
         let key = RateLimiter::get_request_key(&req, user_id);
-        let bucket_size = self.conf.get(&req).expect("Unknown request type in conf");
-        let past_user_req = self.storage_handler.get(&key);
+        let bucket_size = self.get_bucket_size_for_request_type(req);
+        let past_user_reqs: Vec<String> = self.storage_handler.get(&key);
 
-        if past_user_req.len() < (*bucket_size as usize) {
-            // we promote bucket_size since num bits for usize >= i32 (>= since it depends on machine)
-            self.storage_handler.append(&key, "DATE1");
+        let now = chrono::Utc::now();
+
+        // remove old queures (lpop redis)
+        for req in &past_user_reqs {
+            let req_time: chrono::DateTime<chrono::Utc> =
+                chrono::DateTime::from_str(req).expect("Redis key was not a parsable date");
+            println!(
+                "REQ: {}, now - min: {}",
+                req_time,
+                now - chrono::Duration::minutes(1)
+            );
+            if req_time < (now - chrono::Duration::minutes(1)) {
+                self.storage_handler.pop_oldest_request(&key);
+                println!("REMOVEED: {}", req);
+                continue;
+            }
+            break;
+        }
+        let past_user_reqs: Vec<String> = self.storage_handler.get(&key); // get updated list from redis
+
+        // find percentage into current window
+        let percent_into_current_window = now.second() as f32 / 60.0;
+        println!("percnet: {}", percent_into_current_window);
+        let mut num_requests_in_current_window = 0;
+        for req in past_user_reqs.iter().rev() {
+            let req_time: chrono::DateTime<chrono::Utc> =
+                chrono::DateTime::from_str(req).expect("Redis key was not a parsable date");
+            if req_time > now.with_second(0).unwrap() {
+                num_requests_in_current_window += 1
+            } else {
+                break;
+            }
+        }
+
+        let num_requests_in_prev_window = past_user_reqs.len() - num_requests_in_current_window;
+        let rolling_requests = num_requests_in_current_window as f32
+            + num_requests_in_prev_window as f32 * (1.0 - percent_into_current_window);
+
+        if rolling_requests < (bucket_size as f32) {
+            self.storage_handler.append(&key, &now.to_rfc3339());
             RateLimiterResponse::Success
         } else {
             RateLimiterResponse::Drop
@@ -133,7 +174,7 @@ mod tests {
         let mut rl = RateLimiter::new();
         rl.storage_handler.remove_users_past_requests(&request_key); // to ensure past test runs don't mess up
         let max_num_requests_in_window = rl.get_bucket_size_for_request_type(RequestType::Message);
-        for i in 0..max_num_requests_in_window {
+        for _ in 0..max_num_requests_in_window {
             let resp = rl.recv_request(RequestType::Message, user_id);
             assert_eq!(resp, RateLimiterResponse::Success);
         }
@@ -146,7 +187,7 @@ mod tests {
         let request_key = RateLimiter::get_request_key(&RequestType::Message, user_id); // to remove what we've added
         rl.storage_handler.remove_users_past_requests(&request_key); // to ensure past test runs don't mess up
         let max_num_requests_in_window = rl.get_bucket_size_for_request_type(RequestType::Message);
-        for i in 0..max_num_requests_in_window {
+        for _ in 0..max_num_requests_in_window {
             let resp = rl.recv_request(RequestType::Message, user_id);
             assert_eq!(resp, RateLimiterResponse::Success);
         }
@@ -162,18 +203,26 @@ mod tests {
         rl.storage_handler.remove_users_past_requests(&request_key); // to ensure past test runs don't mess up
 
         let max_num_requests_in_window = rl.get_bucket_size_for_request_type(RequestType::Message);
-        for i in 0..max_num_requests_in_window {
+        for _ in 0..max_num_requests_in_window {
             let resp = rl.recv_request(RequestType::Message, user_id);
             assert_eq!(resp, RateLimiterResponse::Success);
             sleep(std::time::Duration::new(5, 0));
         }
         let resp = rl.recv_request(RequestType::Message, user_id);
         assert_eq!(resp, RateLimiterResponse::Drop);
-        sleep(std::time::Duration::new(50, 0)); // window size is 60 seconds, so by now should be able to request more
+        sleep(std::time::Duration::new(55, 0)); // window size is 60 seconds, so by now should be able to request more
+        let resp = rl.recv_request(RequestType::Message, user_id);
         assert_eq!(resp, RateLimiterResponse::Success);
         sleep(std::time::Duration::new(5, 0));
+        let resp = rl.recv_request(RequestType::Message, user_id);
         assert_eq!(resp, RateLimiterResponse::Success);
         sleep(std::time::Duration::new(5, 0));
+        let resp = rl.recv_request(RequestType::Message, user_id);
         assert_eq!(resp, RateLimiterResponse::Success);
+    }
+
+    #[test]
+    fn multiple_users() {
+        unimplemented!()
     }
 }

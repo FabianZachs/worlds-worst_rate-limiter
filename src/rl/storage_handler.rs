@@ -50,4 +50,11 @@ impl StorageHandler {
             .query(&mut self.con)
             .expect("DEL failed");
     }
+
+    pub fn pop_oldest_request(&mut self, key: &str) {
+        let _: () = redis::cmd("lpop")
+            .arg(key)
+            .query(&mut self.con)
+            .expect("LPOP failed");
+    }
 }
