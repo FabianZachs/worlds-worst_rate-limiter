@@ -1,4 +1,4 @@
-use crate::rl::storage_handler::StorageHandler;
+use crate::storage_handler::StorageHandler;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -8,8 +8,11 @@ use std::collections::HashMap;
 use std::{env, io::Read};
 use yaml_rust::YamlLoader;
 
-/// conf maps the domain to the max number of requests per set duration unit
-/// New user requests are first passed to the RateLimiter.
+//! This rate limiter uses a sliding window alogorithm to determine whether a user's request shoud
+//! be dropped or passed on. The conig/rate_limiter_config.yaml file sets the number of requests
+//! per minute per access type (ex. login, message, etc)
+
+/// User requests are passed to the RateLimiter struct via ```recv_request```.
 /// If ```recv_request``` retuns ```RateLimiterResponse::Success``` the request can be forwarded to
 /// the actual servers. if ```RateLimiterResponse::Drop``` is returned, the client has exceeded
 /// their allowed request per unit time, and the request should be dropped.
@@ -20,7 +23,6 @@ pub struct RateLimiter {
     conf: HashMap<RequestType, u32>,
 }
 
-/// The RateLimiter will receive a request, query redis to retreiv
 /// We map a request to a RequestType so our RateLimiter knows what the config is for that request
 /// Example: We may only allow 5 login events per hour, vs 10 message requests every minute
 /// A client's request must be mapped to one of these for the RateLimiter to know the allowed rate
@@ -105,26 +107,20 @@ impl RateLimiter {
 
     /// User requests should be passed into ```recv_request```.
     /// This implements our rate limiter algorithm (see README) and retuns whether the request
-    /// should be dropped (limit already hit), or if the request should be forwarded to the server.
+    /// should be dropped (```RateLimiterResponse::Drop```) (limit already hit), or if the request should be forwarded (```RateLimiterResponse::Success```) to the server.
     pub fn recv_request(&mut self, req: RequestType, user_id: u32) -> RateLimiterResponse {
-        //println!("++++++++++++++++++");
-        //println!("CALL");
         let key = RateLimiter::get_request_key(&req, user_id);
         let bucket_size = self.get_bucket_size_for_request_type(req);
         let past_user_reqs: Vec<String> = self.storage_handler.get(&key);
 
         let now = chrono::Utc::now();
 
-        // remove old queures (lpop redis)
-        //println!("CHECK OLD REQ:");
-        //println!("LOWER bound: {}", now - chrono::Duration::minutes(1));
+        // remove request which were in a past sliding window
         for req in &past_user_reqs {
             let req_time: chrono::DateTime<chrono::Utc> =
                 chrono::DateTime::from_str(req).expect("Redis key was not a parsable date");
 
-            //println!("old req: {}", req_time);
             if req_time < (now - chrono::Duration::minutes(1)) {
-                //println!("REMOVED");
                 self.storage_handler.pop_oldest_request(&key);
                 continue;
             }
@@ -140,8 +136,6 @@ impl RateLimiter {
             let req_time: chrono::DateTime<chrono::Utc> =
                 chrono::DateTime::from_str(req).expect("Redis key was not a parsable date");
             if req_time > now.with_second(0).unwrap() {
-                //println!("IN cu window: {}", req_time);
-                // NOTE suspected this
                 num_requests_in_current_window += 1
             } else {
                 break;
@@ -152,9 +146,6 @@ impl RateLimiter {
         let rolling_requests = num_requests_in_current_window as f32
             + num_requests_in_prev_window as f32 * (1.0 - percent_into_current_window);
 
-        //println!("cur: {}\n\n", num_requests_in_current_window);
-        //println!("prev: {}\n\n", num_requests_in_prev_window);
-        //println!("rolling: {}\n\n", rolling_requests);
         if rolling_requests < (bucket_size as f32) {
             self.storage_handler.append(&key, &now.to_rfc3339());
             RateLimiterResponse::Success
@@ -168,7 +159,7 @@ impl RateLimiter {
 mod tests {
     use std::thread::sleep;
 
-    use crate::rl::rate_limiter::*;
+    use crate::rate_limiter::*;
 
     #[test]
     fn one_req() {
@@ -234,9 +225,4 @@ mod tests {
         let resp = rl.recv_request(RequestType::Message, user_id);
         assert_eq!(resp, RateLimiterResponse::Success);
     }
-
-    //    #[test]
-    //    fn multiple_types() {
-    //        unimplemented!()
-    //    }
 }

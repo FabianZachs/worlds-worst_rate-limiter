@@ -1,4 +1,5 @@
-Middleware rate limiter
+# Middleware rate limiter Notes
+
 Rate limiter works based on user account (or IP?)
 We inform users of being throttled  (HTTP response code 429 (too many requests))
 The rate limiter is distributed
@@ -84,6 +85,7 @@ $ redis-cli
 
 
 
+### Algorithm
 
 Though redis has TTL, it doesnt support this for elements of a list. So the application must handle this.
 

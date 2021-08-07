@@ -4,8 +4,6 @@
 /// For String key: <domain>:<client_id>
 /// For String value: <date_when_request_was_made>
 /// For Vec we have the list of previous requests (for sliding window alg)
-use redis::Commands;
-use std::collections::HashMap;
 use std::env;
 
 pub struct StorageHandler {
@@ -44,6 +42,7 @@ impl StorageHandler {
             .expect("rpush command failed");
     }
 
+    #[allow(dead_code)]
     pub fn remove_users_past_requests(&mut self, key: &str) {
         let _: () = redis::cmd("del")
             .arg(key)
