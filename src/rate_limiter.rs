@@ -1,3 +1,7 @@
+//! This rate limiter uses a sliding window alogorithm to determine whether a user's request shoud
+//! be dropped or passed on. The conig/rate_limiter_config.yaml file sets the number of requests
+//! per minute per access type (ex. login, message, etc)
+
 use crate::storage_handler::StorageHandler;
 use std::path::Path;
 use std::str::FromStr;
@@ -8,9 +12,6 @@ use std::collections::HashMap;
 use std::{env, io::Read};
 use yaml_rust::YamlLoader;
 
-//! This rate limiter uses a sliding window alogorithm to determine whether a user's request shoud
-//! be dropped or passed on. The conig/rate_limiter_config.yaml file sets the number of requests
-//! per minute per access type (ex. login, message, etc)
 
 /// User requests are passed to the RateLimiter struct via ```recv_request```.
 /// If ```recv_request``` retuns ```RateLimiterResponse::Success``` the request can be forwarded to
